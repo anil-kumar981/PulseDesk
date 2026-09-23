@@ -1,0 +1,41 @@
+# ==============================
+# Web Framework
+# ==============================
+fastapi
+uvicorn[standard]
+
+# ==============================
+# Validation & Configuration
+# ==============================
+pydantic
+pydantic-settings
+email-validator
+
+# ==============================
+# Database
+# ==============================
+sqlalchemy
+asyncpg
+alembic
+
+# ==============================
+# Authentication & Security
+# ==============================
+PyJWT
+pwdlib[argon2]
+
+# ==============================
+# HTTP Client
+# ==============================
+httpx
+
+# ==============================
+# Testing
+# ==============================
+pytest
+pytest-asyncio
+
+# ==============================
+# Code Quality
+# ==============================
+ruff
