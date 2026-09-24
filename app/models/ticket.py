@@ -4,7 +4,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from app.database.base import Base
-from app.common.enums import TicketPriority, TicketStatus
+from app.shared.enums import TicketPriority, TicketStatus
 
 class Ticket(Base):
     __tablename__ = "tickets"

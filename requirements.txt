@@ -14,7 +14,7 @@ email-validator
 # ==============================
 # Database
 # ==============================
-sqlalchemy
+sqlalchemy>=2.0
 asyncpg
 alembic
 

@@ -9,7 +9,7 @@ from app.core.config import config
 # from app.middleware.logging import APILoggingMiddleware
 
 from app.modules.auth.router import router as auth_router
-from app.modules.users.router import router as user_router
+from app.modules.user.routes import router as user_router
 from app.modules.tickets.router import router as ticket_router
 from app.modules.roles.router import router as role_router
 

@@ -2,7 +2,7 @@ from uuid import UUID
 from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel, ConfigDict
-from app.common.enums import TicketPriority, TicketStatus
+from app.shared.enums import TicketPriority, TicketStatus
 
 class TicketBase(BaseModel):
     title: str
