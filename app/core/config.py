@@ -28,9 +28,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRES_IN: str = "7d"
+    ACCESS_TOKEN_EXPIRES_IN: int = 15  # 15 minutes
+    REFRESH_TOKEN_EXPIRES_IN: int = 7  # 7 days
+    REFRESH_TOKEN_COOKIE_NAME: str = "refresh_token"
     SALT_ROUNDS: int = 12
-    JWT_COOKIE_NAME: str = "access_token"
 
     # Mail parameters
     MAIL_HOST: str = "smtp.gmail.com"

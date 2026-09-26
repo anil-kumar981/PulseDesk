@@ -7,6 +7,7 @@ from app.models.comment import Comment
 from app.models.assignment import TicketAssignment
 from app.models.status_history import TicketStatusHistory
 from app.models.audit_log import AuditLog
+from app.models.refresh_session import RefreshSession
 
 # This ensures all models are imported and registered with the SQLAlchemy Base metadata
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "TicketAssignment",
     "TicketStatusHistory",
     "AuditLog",
+    "RefreshSession",
 ]

@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends
 from typing import Dict, Any
 from app.schemas.user import UserCreate, UserUpdate
+from app.models.user import User
+from app.modules.auth.dependencies import get_current_user
 from app.modules.user.iuser_service import IUserService
 from app.modules.user.dependencies import get_user_service
 from app.shared.custom_route import ResponseWrapperRoute
@@ -12,7 +14,10 @@ async def create_user(user: UserCreate, service: IUserService = Depends(get_user
     return await service.create(user)
 
 @router.get("/")
-async def get_users(service: IUserService = Depends(get_user_service)):
+async def get_users(
+    service: IUserService = Depends(get_user_service),
+    current_user: User = Depends(get_current_user)
+):
     return await service.get_all()
 
 @router.get("/{id}")
