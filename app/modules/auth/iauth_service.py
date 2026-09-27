@@ -24,15 +24,11 @@ class IAuthService(ABC):
         pass
 
     @abstractmethod
-    async def login_verify_otp(self, request: LoginVerifyRequest) -> ApiResponse:
+    async def login_verify_otp(self, request: LoginVerifyRequest, http_request: Request) -> ApiResponse:
         pass
 
     @abstractmethod
     async def forgot_password_request_otp(self, request: ForgotPasswordRequest) -> ApiResponse:
-        pass
-
-    @abstractmethod
-    async def forgot_password_verify_otp(self, request: VerifyOTPRequest) -> ApiResponse:
         pass
 
     @abstractmethod

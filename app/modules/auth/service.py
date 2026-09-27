@@ -6,9 +6,8 @@ from sqlalchemy import select, delete
 
 from app.core.config import config
 from app.shared.security import get_password_hash, verify_password, create_access_token, verify_token
-from app.shared.otp import generate_otp, hash_otp, verify_otp_hash, generate_reset_token, send_email_otp
+from app.shared.otp import generate_otp, hash_otp, verify_otp_hash, send_email_otp
 from app.models.auth_otp import AuthOTP
-from app.models.reset_token import ResetToken
 from app.models.user import User
 from app.modules.auth.iauth_service import IAuthService
 from app.modules.auth.iauth_repo import IAuthRepo
@@ -62,7 +61,6 @@ class AuthService(IAuthService):
 
     async def _cleanup_unverified_users(self):
         one_hour_ago = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
-        # Delete users who are not verified and created more than 1 hour ago
         await self.user_repo.db_session.execute(
             delete(User).where(User.email_verified == False).where(User.created_at < one_hour_ago)
         )
@@ -79,14 +77,12 @@ class AuthService(IAuthService):
             if existing_user.email_verified:
                 return ApiResponse.error("Email already registered", code=status.HTTP_400_BAD_REQUEST)
             else:
-                # Update existing unverified user
                 existing_user.first_name = request.first_name
                 existing_user.last_name = request.last_name
                 existing_user.password_hash = get_password_hash(request.password)
-                existing_user.created_at = datetime.now(timezone.utc).replace(tzinfo=None) # Reset the 1-hour clock
+                existing_user.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
                 await self.user_repo.update(existing_user)
         else:
-            # Create unverified user directly in the users table
             user = User(
                 first_name=request.first_name,
                 last_name=request.last_name,
@@ -97,7 +93,6 @@ class AuthService(IAuthService):
             await self.user_repo.create(user)
         
         await self._handle_otp_generation(request.email, "registration")
-        
         return ApiResponse.success(message="OTP sent to email. Please verify to complete registration.")
 
     async def register_verify_otp(self, request: VerifyOTPRequest) -> ApiResponse:
@@ -112,7 +107,6 @@ class AuthService(IAuthService):
             
         user.email_verified = True
         await self.user_repo.update(user)
-        
         await self.auth_repo.delete_otp(db_otp.id)
         
         return ApiResponse.success(message="Registration complete. You may now log in.")
@@ -129,7 +123,7 @@ class AuthService(IAuthService):
         await self._handle_otp_generation(request.email, "login", user.id)
         return ApiResponse.success(message="OTP sent to email.")
 
-    async def login_verify_otp(self, request: LoginVerifyRequest) -> ApiResponse:
+    async def login_verify_otp(self, request: LoginVerifyRequest, http_request: Request) -> ApiResponse:
         try:
             db_otp = await self._verify_otp_logic(request.email, "login", request.otp)
         except ValueError as e:
@@ -141,10 +135,15 @@ class AuthService(IAuthService):
             
         await self.auth_repo.delete_otp(db_otp.id)
         
-        # Create stateless JWT token
+        device_id = http_request.headers.get("deviceId")
+        if not device_id:
+            return ApiResponse.error("Missing deviceId header", code=status.HTTP_400_BAD_REQUEST)
+            
         access_token = create_access_token(
             subject=str(user.id),
-            extra_claims={"role_id": str(user.roles[0].id) if user.roles else None}
+            extra_claims={
+                "device_id": device_id
+            }
         )
         return ApiResponse.success(data=Token(access_token=access_token))
 
@@ -157,7 +156,7 @@ class AuthService(IAuthService):
             await self._handle_otp_generation(request.email, "forgot_password", user.id)
         return ApiResponse.success(message="If the email exists, an OTP has been sent.")
 
-    async def forgot_password_verify_otp(self, request: VerifyOTPRequest) -> ApiResponse:
+    async def forgot_password_reset(self, request: ResetPasswordRequest) -> ApiResponse:
         try:
             db_otp = await self._verify_otp_logic(request.email, "forgot_password", request.otp)
         except ValueError as e:
@@ -167,33 +166,10 @@ class AuthService(IAuthService):
         if not user:
             return ApiResponse.error("User not found", code=status.HTTP_404_NOT_FOUND)
             
-        raw_token = generate_reset_token()
-        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-        
-        reset_token = ResetToken(
-            user_id=user.id,
-            token_hash=token_hash,
-            expires_at=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=15)
-        )
-        await self.auth_repo.create_reset_token(reset_token)
-        await self.auth_repo.delete_otp(db_otp.id)
-        
-        return ApiResponse.success(data={"reset_token": raw_token})
-
-    async def forgot_password_reset(self, request: ResetPasswordRequest) -> ApiResponse:
-        token_hash = hashlib.sha256(request.reset_token.encode()).hexdigest()
-        db_token = await self.auth_repo.get_reset_token_by_hash(token_hash)
-        
-        if not db_token or db_token.is_consumed or db_token.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
-            return ApiResponse.error("Invalid or expired reset token", code=status.HTTP_400_BAD_REQUEST)
-            
-        user = await self.user_repo.get(db_token.user_id)
-        if not user:
-            return ApiResponse.error("User not found", code=status.HTTP_404_NOT_FOUND)
-            
         user.password_hash = get_password_hash(request.new_password)
         await self.user_repo.update(user)
-        await self.auth_repo.consume_reset_token(db_token.id)
+        
+        await self.auth_repo.delete_otp(db_otp.id)
         
         return ApiResponse.success(message="Password reset successfully. You may now log in.")
 
@@ -201,5 +177,5 @@ class AuthService(IAuthService):
     # LOGOUT
     # ---------------------------------------------------------
     async def logout(self, request: Request) -> ApiResponse:
-        # Since token is in cookie and stateless, logout is handled by the client/router deleting the cookie.
+        # Since token is stateless, logout is handled by client deleting token
         return ApiResponse.success(message="Successfully logged out")

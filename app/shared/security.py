@@ -12,14 +12,11 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 def get_password_hash(password: str) -> str:
     return password_hash.hash(password)
 
-def create_access_token(subject: str) -> str:
+def create_access_token(subject: str, extra_claims: Dict[str, Any] = None) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=config.ACCESS_TOKEN_EXPIRES_IN)
     to_encode = {"exp": expire, "sub": str(subject), "type": "access"}
-    return jwt.encode(to_encode, config.JWT_SECRET_KEY, algorithm=config.JWT_ALGORITHM)
-
-def create_refresh_token(subject: str, session_id: str) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(days=config.REFRESH_TOKEN_EXPIRES_IN)
-    to_encode = {"exp": expire, "sub": str(subject), "session_id": str(session_id), "type": "refresh"}
+    if extra_claims:
+        to_encode.update(extra_claims)
     return jwt.encode(to_encode, config.JWT_SECRET_KEY, algorithm=config.JWT_ALGORITHM)
 
 def verify_token(token: str) -> Dict[str, Any]:
