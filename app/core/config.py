@@ -28,10 +28,14 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRES_IN: int = 15  # 15 minutes
-    REFRESH_TOKEN_EXPIRES_IN: int = 7  # 7 days
-    REFRESH_TOKEN_COOKIE_NAME: str = "refresh_token"
+    ACCESS_TOKEN_EXPIRES_IN: int = 7  # 7 days
     SALT_ROUNDS: int = 12
+    
+    # OTP Settings
+    OTP_EXPIRES_IN: int = 10 # 10 minutes
+    OTP_LENGTH: int = 6
+    MAX_OTP_ATTEMPTS: int = 3
+    PENDING_REGISTRATION_EXPIRES_IN: int = 60 # 60 minutes
 
     # Mail parameters
     MAIL_HOST: str = "smtp.gmail.com"

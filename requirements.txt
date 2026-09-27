@@ -23,6 +23,7 @@ alembic
 # ==============================
 PyJWT
 pwdlib[argon2]
+cryptography>=41.0.0
 
 # ==============================
 # HTTP Client

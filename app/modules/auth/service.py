@@ -1,118 +1,205 @@
 import uuid
+import hashlib
 from datetime import datetime, timedelta, timezone
-from fastapi import Request, Response, status
+from fastapi import Request, status
+from sqlalchemy import select, delete
+
 from app.core.config import config
-from app.core.security import verify_password, create_access_token, create_refresh_token, verify_token
-from app.models.refresh_session import RefreshSession
+from app.shared.security import get_password_hash, verify_password, create_access_token, verify_token
+from app.shared.otp import generate_otp, hash_otp, verify_otp_hash, generate_reset_token, send_email_otp
+from app.models.auth_otp import AuthOTP
+from app.models.reset_token import ResetToken
+from app.models.user import User
 from app.modules.auth.iauth_service import IAuthService
 from app.modules.auth.iauth_repo import IAuthRepo
 from app.modules.user.iuser_repo import IUserRepo
-from app.schemas.auth import LoginRequest, Token
+from app.schemas.auth import (
+    RegisterRequest, VerifyOTPRequest, LoginRequest, LoginVerifyRequest,
+    ForgotPasswordRequest, ResetPasswordRequest, Token
+)
 from app.shared.api_response import ApiResponse
-
-def set_refresh_cookie(response: Response, refresh_token: str):
-    response.set_cookie(
-        key=config.REFRESH_TOKEN_COOKIE_NAME,
-        value=refresh_token,
-        httponly=True,
-        secure=config.COOKIE_SECURE,
-        samesite=config.COOKIE_SAMESITE,
-        max_age=config.REFRESH_TOKEN_EXPIRES_IN * 24 * 60 * 60,
-    )
-
-def clear_refresh_cookie(response: Response):
-    response.delete_cookie(
-        key=config.REFRESH_TOKEN_COOKIE_NAME,
-        httponly=True,
-        secure=config.COOKIE_SECURE,
-        samesite=config.COOKIE_SAMESITE,
-    )
 
 class AuthService(IAuthService):
     def __init__(self, auth_repo: IAuthRepo, user_repo: IUserRepo):
         self.auth_repo = auth_repo
         self.user_repo = user_repo
 
-    async def login(self, request: LoginRequest, response: Response):
+    async def _handle_otp_generation(self, email: str, purpose: str, user_id: uuid.UUID = None):
+        otp = generate_otp(config.OTP_LENGTH)
+        otp_hash = hash_otp(otp)
+        
+        expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=config.OTP_EXPIRES_IN)
+        
+        auth_otp = AuthOTP(
+            user_id=user_id,
+            email=email,
+            purpose=purpose,
+            otp_hash=otp_hash,
+            expires_at=expires_at
+        )
+        await self.auth_repo.create_otp(auth_otp)
+        send_email_otp(email, otp, purpose)
+
+    async def _verify_otp_logic(self, email: str, purpose: str, incoming_otp: str) -> AuthOTP:
+        db_otp = await self.auth_repo.get_latest_otp(email, purpose)
+        if not db_otp:
+            raise ValueError("OTP not requested or expired")
+            
+        if db_otp.attempts >= config.MAX_OTP_ATTEMPTS:
+            await self.auth_repo.delete_otp(db_otp.id)
+            raise ValueError("Maximum OTP attempts reached. Please request a new OTP.")
+            
+        if db_otp.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
+            await self.auth_repo.delete_otp(db_otp.id)
+            raise ValueError("OTP has expired")
+            
+        if not verify_otp_hash(incoming_otp, db_otp.otp_hash):
+            db_otp.attempts += 1
+            await self.auth_repo.update_otp(db_otp)
+            raise ValueError("Invalid OTP")
+            
+        return db_otp
+
+    async def _cleanup_unverified_users(self):
+        one_hour_ago = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
+        # Delete users who are not verified and created more than 1 hour ago
+        await self.user_repo.db_session.execute(
+            delete(User).where(User.email_verified == False).where(User.created_at < one_hour_ago)
+        )
+        await self.user_repo.db_session.commit()
+
+    # ---------------------------------------------------------
+    # REGISTRATION
+    # ---------------------------------------------------------
+    async def register_request_otp(self, request: RegisterRequest) -> ApiResponse:
+        await self._cleanup_unverified_users()
+        
+        existing_user = await self.user_repo.get_by_email(request.email)
+        if existing_user:
+            if existing_user.email_verified:
+                return ApiResponse.error("Email already registered", code=status.HTTP_400_BAD_REQUEST)
+            else:
+                # Update existing unverified user
+                existing_user.first_name = request.first_name
+                existing_user.last_name = request.last_name
+                existing_user.password_hash = get_password_hash(request.password)
+                existing_user.created_at = datetime.now(timezone.utc).replace(tzinfo=None) # Reset the 1-hour clock
+                await self.user_repo.update(existing_user)
+        else:
+            # Create unverified user directly in the users table
+            user = User(
+                first_name=request.first_name,
+                last_name=request.last_name,
+                email=request.email,
+                password_hash=get_password_hash(request.password),
+                email_verified=False
+            )
+            await self.user_repo.create(user)
+        
+        await self._handle_otp_generation(request.email, "registration")
+        
+        return ApiResponse.success(message="OTP sent to email. Please verify to complete registration.")
+
+    async def register_verify_otp(self, request: VerifyOTPRequest) -> ApiResponse:
+        try:
+            db_otp = await self._verify_otp_logic(request.email, "registration", request.otp)
+        except ValueError as e:
+            return ApiResponse.error(str(e), code=status.HTTP_400_BAD_REQUEST)
+            
+        user = await self.user_repo.get_by_email(request.email)
+        if not user or user.email_verified:
+            return ApiResponse.error("Registration session expired or already verified.", code=status.HTTP_400_BAD_REQUEST)
+            
+        user.email_verified = True
+        await self.user_repo.update(user)
+        
+        await self.auth_repo.delete_otp(db_otp.id)
+        
+        return ApiResponse.success(message="Registration complete. You may now log in.")
+
+    # ---------------------------------------------------------
+    # LOGIN
+    # ---------------------------------------------------------
+    async def login_request_otp(self, request: LoginRequest) -> ApiResponse:
         user = await self.user_repo.get_by_email(request.email)
         
-        if not user or not verify_password(request.password, user.password_hash):
-            return ApiResponse.error(message="Incorrect email or password", code=status.HTTP_401_UNAUTHORIZED)
+        if not user or not user.email_verified or not verify_password(request.password, user.password_hash):
+            return ApiResponse.error("Incorrect email or password", code=status.HTTP_401_UNAUTHORIZED)
             
-        session_id = uuid.uuid4()
-        access_token = create_access_token(subject=str(user.id))
-        refresh_token = create_refresh_token(subject=str(user.id), session_id=str(session_id))
-        
-        refresh_session = RefreshSession(
-            id=session_id,
-            user_id=user.id,
-            expires_at=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=config.REFRESH_TOKEN_EXPIRES_IN)
-        )
-        
-        await self.auth_repo.create(refresh_session)
-        
-        set_refresh_cookie(response, refresh_token)
-        
-        # Return success with token data
-        token_data = Token(access_token=access_token)
-        return ApiResponse.success(data=token_data)
+        await self._handle_otp_generation(request.email, "login", user.id)
+        return ApiResponse.success(message="OTP sent to email.")
 
-    async def refresh_token(self, request: Request, response: Response):
-        token = request.cookies.get(config.REFRESH_TOKEN_COOKIE_NAME)
-        if not token:
-            token = request.headers.get("x-refresh-token")
-            
-        if not token:
-            return ApiResponse.error(message="Missing refresh token", code=status.HTTP_401_UNAUTHORIZED)
-            
+    async def login_verify_otp(self, request: LoginVerifyRequest) -> ApiResponse:
         try:
-            payload = verify_token(token)
+            db_otp = await self._verify_otp_logic(request.email, "login", request.otp)
         except ValueError as e:
-            return ApiResponse.error(message=str(e), code=status.HTTP_401_UNAUTHORIZED)
+            return ApiResponse.error(str(e), code=status.HTTP_400_BAD_REQUEST)
             
-        if payload.get("type") != "refresh":
-            return ApiResponse.error(message="Invalid token type", code=status.HTTP_401_UNAUTHORIZED)
+        user = await self.user_repo.get_by_email(request.email)
+        if not user or not user.email_verified:
+            return ApiResponse.error("User not found or unverified", code=status.HTTP_401_UNAUTHORIZED)
             
-        user_id_str = payload.get("sub")
-        session_id_str = payload.get("session_id")
+        await self.auth_repo.delete_otp(db_otp.id)
         
-        if not user_id_str or not session_id_str:
-            return ApiResponse.error(message="Invalid token payload", code=status.HTTP_401_UNAUTHORIZED)
-            
-        session_id = uuid.UUID(session_id_str)
-        
-        session = await self.auth_repo.get_by_session_id(session_id)
-        
-        if not session:
-            return ApiResponse.error(message="Session not found", code=status.HTTP_401_UNAUTHORIZED)
-            
-        if session.is_revoked:
-            return ApiResponse.error(message="Session revoked", code=status.HTTP_401_UNAUTHORIZED)
-            
-        if session.expires_at < datetime.utcnow(): # naive because db uses naive internally in most local setups
-            return ApiResponse.error(message="Session expired in DB", code=status.HTTP_401_UNAUTHORIZED)
-            
-        access_token = create_access_token(subject=user_id_str)
-        token_data = Token(access_token=access_token)
-        
-        return ApiResponse.success(data=token_data)
+        # Create stateless JWT token
+        access_token = create_access_token(
+            subject=str(user.id),
+            extra_claims={"role_id": str(user.roles[0].id) if user.roles else None}
+        )
+        return ApiResponse.success(data=Token(access_token=access_token))
 
-    async def logout(self, request: Request, response: Response):
-        token = request.cookies.get(config.REFRESH_TOKEN_COOKIE_NAME)
-        if not token:
-            token = request.headers.get("x-refresh-token")
+    # ---------------------------------------------------------
+    # FORGOT PASSWORD
+    # ---------------------------------------------------------
+    async def forgot_password_request_otp(self, request: ForgotPasswordRequest) -> ApiResponse:
+        user = await self.user_repo.get_by_email(request.email)
+        if user and user.email_verified:
+            await self._handle_otp_generation(request.email, "forgot_password", user.id)
+        return ApiResponse.success(message="If the email exists, an OTP has been sent.")
+
+    async def forgot_password_verify_otp(self, request: VerifyOTPRequest) -> ApiResponse:
+        try:
+            db_otp = await self._verify_otp_logic(request.email, "forgot_password", request.otp)
+        except ValueError as e:
+            return ApiResponse.error(str(e), code=status.HTTP_400_BAD_REQUEST)
             
-        if token:
-            try:
-                payload = verify_token(token)
-                if payload.get("type") == "refresh":
-                    session_id = uuid.UUID(payload.get("session_id"))
-                    session = await self.auth_repo.get_by_session_id(session_id)
-                    if session and not session.is_revoked:
-                        session.is_revoked = True
-                        await self.auth_repo.update(session)
-            except Exception:
-                pass
-                
-        clear_refresh_cookie(response)
+        user = await self.user_repo.get_by_email(request.email)
+        if not user:
+            return ApiResponse.error("User not found", code=status.HTTP_404_NOT_FOUND)
+            
+        raw_token = generate_reset_token()
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        
+        reset_token = ResetToken(
+            user_id=user.id,
+            token_hash=token_hash,
+            expires_at=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=15)
+        )
+        await self.auth_repo.create_reset_token(reset_token)
+        await self.auth_repo.delete_otp(db_otp.id)
+        
+        return ApiResponse.success(data={"reset_token": raw_token})
+
+    async def forgot_password_reset(self, request: ResetPasswordRequest) -> ApiResponse:
+        token_hash = hashlib.sha256(request.reset_token.encode()).hexdigest()
+        db_token = await self.auth_repo.get_reset_token_by_hash(token_hash)
+        
+        if not db_token or db_token.is_consumed or db_token.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
+            return ApiResponse.error("Invalid or expired reset token", code=status.HTTP_400_BAD_REQUEST)
+            
+        user = await self.user_repo.get(db_token.user_id)
+        if not user:
+            return ApiResponse.error("User not found", code=status.HTTP_404_NOT_FOUND)
+            
+        user.password_hash = get_password_hash(request.new_password)
+        await self.user_repo.update(user)
+        await self.auth_repo.consume_reset_token(db_token.id)
+        
+        return ApiResponse.success(message="Password reset successfully. You may now log in.")
+
+    # ---------------------------------------------------------
+    # LOGOUT
+    # ---------------------------------------------------------
+    async def logout(self, request: Request) -> ApiResponse:
+        # Since token is in cookie and stateless, logout is handled by the client/router deleting the cookie.
         return ApiResponse.success(message="Successfully logged out")
