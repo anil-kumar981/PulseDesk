@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.iauth_repo import IAuthRepo
 from app.models.auth_otp import AuthOTP
+from app.models.session import Session
 
 class AuthRepo(IAuthRepo):
     def __init__(self, db_session: AsyncSession):
@@ -33,3 +34,19 @@ class AuthRepo(IAuthRepo):
     async def delete_otp(self, id: uuid.UUID) -> None:
         await self.db_session.execute(delete(AuthOTP).where(AuthOTP.id == id))
         await self.db_session.commit()
+        
+    async def create_session(self, session: Session) -> Session:
+        self.db_session.add(session)
+        await self.db_session.commit()
+        return session
+        
+    async def get_session(self, id: uuid.UUID) -> Optional[Session]:
+        result = await self.db_session.execute(
+            select(Session).filter(Session.id == id)
+        )
+        return result.scalar_one_or_none()
+        
+    async def update_session(self, session: Session) -> Session:
+        self.db_session.add(session)
+        await self.db_session.commit()
+        return session

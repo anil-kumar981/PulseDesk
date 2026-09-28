@@ -5,11 +5,12 @@ from fastapi import Request, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-
+from app.models.session import Session
 from app.shared.security import verify_token
 from app.database.session import get_db
 from app.models.user import User
 from app.models.role import Role
+from datetime import datetime, timezone
 from app.modules.auth.iauth_service import IAuthService
 from app.modules.auth.service import AuthService
 from app.modules.auth.repository import AuthRepo
@@ -54,14 +55,27 @@ def require_auth(*required_permissions: str):
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
                 
             user_id_str = payload.get("sub")
-            jwt_device_id = payload.get("device_id")
+            session_id_str = payload.get("session_id")
             
-            if not user_id_str:
+            if not user_id_str or not session_id_str:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
                 
-            # Verify device ID from header matches the one embedded in JWT during login
-            incoming_device_id = request.headers.get("deviceId")
-            if not incoming_device_id or incoming_device_id != jwt_device_id:
+            session_id = uuid.UUID(session_id_str)
+            
+            session_result = await db.execute(select(Session).filter(Session.id == session_id))
+            db_session = session_result.scalar_one_or_none()
+            
+            if not db_session or db_session.is_revoked or db_session.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired or revoked. Please login again.")
+                
+            # Strict header match
+            if (
+                request.headers.get("deviceType") != db_session.device_type or
+                request.headers.get("appVersion") != db_session.app_version or
+                request.headers.get("deviceId") != db_session.device_id or
+                request.headers.get("device") != db_session.device or
+                request.headers.get("deviceVersion") != db_session.device_version
+            ):
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Device verification failed. Please login again.")
                 
             # Load User with RBAC details

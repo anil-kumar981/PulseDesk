@@ -3,6 +3,7 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 from fastapi import Request, status
 from sqlalchemy import select, delete
+from app.models.session import Session
 
 from app.core.config import config
 from app.shared.security import get_password_hash, verify_password, create_access_token, verify_token
@@ -138,11 +139,25 @@ class AuthService(IAuthService):
         device_id = http_request.headers.get("deviceId")
         if not device_id:
             return ApiResponse.error("Missing deviceId header", code=status.HTTP_400_BAD_REQUEST)
-            
+        
+        session_id = uuid.uuid4()
+        session = Session(
+            id=session_id,
+            user_id=user.id,
+            device_type=device_id, # Or use http_request.headers if we want them separately
+            app_version=http_request.headers.get("appVersion", ""),
+            device_id=device_id,
+            device=http_request.headers.get("device", ""),
+            device_version=http_request.headers.get("deviceVersion", ""),
+            expires_at=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=config.ACCESS_TOKEN_EXPIRES_IN // 1440) # rough estimate, or config
+        )
+        await self.auth_repo.create_session(session)
+        
         access_token = create_access_token(
             subject=str(user.id),
             extra_claims={
-                "device_id": device_id
+                "device_id": device_id,
+                "session_id": str(session_id)
             }
         )
         return ApiResponse.success(data=Token(access_token=access_token))
@@ -177,5 +192,19 @@ class AuthService(IAuthService):
     # LOGOUT
     # ---------------------------------------------------------
     async def logout(self, request: Request) -> ApiResponse:
-        # Since token is stateless, logout is handled by client deleting token
+        user = getattr(request.state, "current_user", None)
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ")[1]
+            try:
+                payload = verify_token(token)
+                session_id_str = payload.get("session_id")
+                if session_id_str:
+                    session = await self.auth_repo.get_session(uuid.UUID(session_id_str))
+                    if session:
+                        session.is_revoked = True
+                        await self.auth_repo.update_session(session)
+            except Exception:
+                pass
+                
         return ApiResponse.success(message="Successfully logged out")
