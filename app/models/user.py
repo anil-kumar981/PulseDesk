@@ -1,5 +1,6 @@
 import uuid
 from sqlalchemy import Boolean, Column, DateTime, String
+from app.models.user_role import UserRole
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
@@ -18,4 +19,4 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    roles = relationship("Role", secondary="user_roles", back_populates="users")
+    roles = relationship("Role", secondary=UserRole.__table__, back_populates="users")

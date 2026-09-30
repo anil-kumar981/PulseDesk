@@ -1,3 +1,4 @@
+from app.models.user_role import UserRole
 from app.models.role import Role
 from app.models.user import User
 from app.models.permission import Permission
@@ -21,4 +22,5 @@ __all__ = [
     "AuditLog",
     "AuthOTP",
     "Session",
+    "UserRole",
 ]

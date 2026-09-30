@@ -82,7 +82,12 @@ class AuthService(IAuthService):
                 existing_user.last_name = request.last_name
                 existing_user.password_hash = get_password_hash(request.password)
                 existing_user.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
-                await self.user_repo.update(existing_user)
+                await self.user_repo.update(existing_user.id, {
+                    "first_name": request.first_name,
+                    "last_name": request.last_name,
+                    "password_hash": existing_user.password_hash,
+                    "created_at": existing_user.created_at
+                })
         else:
             user = User(
                 first_name=request.first_name,
@@ -107,7 +112,7 @@ class AuthService(IAuthService):
             return ApiResponse.error("Registration session expired or already verified.", code=status.HTTP_400_BAD_REQUEST)
             
         user.email_verified = True
-        await self.user_repo.update(user)
+        await self.user_repo.update(user.id, {"email_verified": True})
         await self.auth_repo.delete_otp(db_otp.id)
         
         return ApiResponse.success(message="Registration complete. You may now log in.")
@@ -182,7 +187,7 @@ class AuthService(IAuthService):
             return ApiResponse.error("User not found", code=status.HTTP_404_NOT_FOUND)
             
         user.password_hash = get_password_hash(request.new_password)
-        await self.user_repo.update(user)
+        await self.user_repo.update(user.id, {"password_hash": user.password_hash})
         
         await self.auth_repo.delete_otp(db_otp.id)
         
