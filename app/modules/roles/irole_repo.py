@@ -17,11 +17,10 @@ class IRoleRepo(IBaseRepo[Role]):
     async def get_by_id_with_permissions(self, id: str) -> Optional[Role]:
         pass
 
-class IPermissionRepo(IBaseRepo[Permission]):
     @abstractmethod
-    async def get_by_role_id(self, role_id: str) -> List[Permission]:
+    async def assign_permission(self, role: Role, permission: Permission) -> None:
         pass
 
     @abstractmethod
-    async def clear_role_permissions(self, role_id: str) -> None:
+    async def revoke_permission(self, role: Role, permission: Permission) -> None:
         pass

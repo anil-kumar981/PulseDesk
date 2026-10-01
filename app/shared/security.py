@@ -26,3 +26,34 @@ def verify_token(token: str) -> Dict[str, Any]:
         raise ValueError("Token expired")
     except jwt.InvalidTokenError:
         raise ValueError("Invalid token")
+
+def get_user_level(user) -> int:
+    if not hasattr(user, "roles") or not user.roles:
+        return 0
+    return max([role.level for role in user.roles])
+
+def has_permission(current_user, target_user, resource: str, action: str) -> bool:
+    """
+    Check if current_user can perform 'action' on 'target_user' for 'resource'.
+    Enforces scope ('own' vs 'all') and hierarchy level.
+    """
+    # System administrator check (example: super admin might have level 100)
+    current_level = get_user_level(current_user)
+    
+    # Extract relevant permissions for the resource
+    has_access = False
+    for role in current_user.roles:
+        for perm in role.permissions:
+            if perm.resource == resource and (perm.action == action or perm.action in ["MANAGE", "MANAGEALL"]):
+                scope = perm.scope
+                if scope == "own":
+                    if target_user and target_user.id == current_user.id:
+                        has_access = True
+                elif scope == "all":
+                    if not target_user or target_user.id == current_user.id:
+                        has_access = True
+                    else:
+                        target_level = get_user_level(target_user)
+                        if current_level > target_level:
+                            has_access = True
+    return has_access

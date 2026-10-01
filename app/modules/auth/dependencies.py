@@ -15,20 +15,22 @@ from app.modules.auth.iauth_service import IAuthService
 from app.modules.auth.service import AuthService
 from app.modules.auth.repository import AuthRepo
 from app.modules.user.user_repo import UserRepo
+from app.shared.security import has_permission
+
 
 def get_auth_service(db: AsyncSession = Depends(get_db)) -> IAuthService:
     auth_repo = AuthRepo(db)
     user_repo = UserRepo(db)
     return AuthService(auth_repo, user_repo)
 
-def require_auth(*required_permissions: str):
+def require_auth(resource: str = None, action: str = None):
     """
     Combined Decorator for Authentication & Authorization.
     - Reads Bearer token from headers.
     - Validates stateless JWT.
     - Matches JWT `device_id` against `deviceId` header.
     - Fetches user from DB with eager loaded roles/permissions.
-    - Checks required permissions.
+    - Checks advanced RBAC (hierarchy & scope) via has_permission if resource and action are provided.
     - Injects `current_user` into the route kwargs.
     """
     def decorator(func: Callable):
@@ -90,18 +92,25 @@ def require_auth(*required_permissions: str):
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
                 
             # Role & Permission Check
-            if required_permissions:
-                user_permissions = set()
-                for role in user.roles:
-                    for permission in role.permissions:
-                        user_permissions.add(permission.name)
-                        
-                for req_perm in required_permissions:
-                    if req_perm not in user_permissions:
-                        raise HTTPException(
-                            status_code=status.HTTP_403_FORBIDDEN, 
-                            detail=f"Not enough permissions. Required: {req_perm}"
+            if resource and action:
+                target_user = None
+                
+                # If checking a User resource, try to find the target_user from the route params
+                if resource == "User":
+                    target_id = kwargs.get("user_id") or kwargs.get("id")
+                    if target_id:
+                        if isinstance(target_id, str):
+                            target_id = uuid.UUID(target_id)
+                        t_res = await db.execute(
+                            select(User).options(selectinload(User.roles)).filter(User.id == target_id)
                         )
+                        target_user = t_res.scalar_one_or_none()
+                        
+                if not has_permission(user, target_user, resource, action):
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN, 
+                        detail=f"Access denied for {action} on {resource}. Scope or hierarchy restrictions applied."
+                    )
             
             # Inject current_user into request state
             request.state.current_user = user

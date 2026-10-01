@@ -1,6 +1,6 @@
 from abc import abstractmethod
 from typing import Any
-from app.modules.roles.schemas import RoleCreate, RoleUpdate
+from app.schemas.role import RoleCreate, RoleUpdate
 from app.shared.api_response import ApiResponse
 
 class IRoleService:
@@ -22,4 +22,12 @@ class IRoleService:
 
     @abstractmethod
     async def delete_role(self, role_id: Any) -> ApiResponse:
+        pass
+
+    @abstractmethod
+    async def assign_permission(self, role_id: Any, permission_id: Any) -> ApiResponse:
+        pass
+
+    @abstractmethod
+    async def revoke_permission(self, role_id: Any, permission_id: Any) -> ApiResponse:
         pass

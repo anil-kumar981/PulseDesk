@@ -12,6 +12,7 @@ from app.modules.auth.router import router as auth_router
 from app.modules.user.routes import router as user_router
 from app.modules.tickets.router import router as ticket_router
 from app.modules.roles.router import router as role_router
+from app.modules.permissions.router import router as permission_router
 
 # Instantiate global security scheme for Swagger UI "Authorize" button
 security_scheme = HTTPBearer(auto_error=False)
@@ -44,6 +45,7 @@ app.include_router(user_router, prefix="/api/users")
 app.include_router(auth_router, prefix="/api/auth")
 app.include_router(ticket_router, prefix="/api/tickets")
 app.include_router(role_router, prefix="/api/roles")
+app.include_router(permission_router, prefix="/api/permissions")
 
 @app.get("/", tags=["Health"])
 async def root_health_check():
